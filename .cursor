@@ -1,0 +1,53 @@
+{
+  "version": "1.0",
+  "project": {
+    "name": "Lost and Found",
+    "type": "web-application",
+    "maintainers": ["QualityDrivenSoftwareLtd"]
+  },
+  "coreRules": {
+    "environment": {
+      "default": "development",
+      "allowed": ["development", "test", "production"],
+      "strict": true
+    },
+    "codeQuality": {
+      "maxFileLength": 300,
+      "requireDocumentation": true,
+      "enforceTypeSafety": true
+    },
+    "security": {
+      "protectEnvFiles": true,
+      "noHardcodedSecrets": true,
+      "requireAuthForSensitiveEndpoints": true
+    },
+    "testing": {
+      "requireTestsForNewFeatures": true,
+      "mockDataOnlyInTests": true,
+      "coverageThreshold": 80
+    }
+  },
+  "filePatterns": {
+    "include": [
+      "src/**/*",
+      "tests/**/*",
+      "config/**/*"
+    ],
+    "exclude": [
+      "node_modules/**",
+      "dist/**",
+      "build/**",
+      "*.min.js",
+      "*.min.css"
+    ]
+  },
+  "dependencies": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "documentation": {
+    "required": true,
+    "format": "markdown",
+    "updateOnChanges": true
+  }
+} 

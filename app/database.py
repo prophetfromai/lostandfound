@@ -1,17 +1,25 @@
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
 import os
+from typing import Optional
 
 load_dotenv()
 
 class Neo4jConnection:
     def __init__(self):
-        self.uri = os.getenv("NEO4J_URI")
-        self.user = os.getenv("NEO4J_USER")
-        self.password = os.getenv("NEO4J_PASSWORD")
-        self.driver = None
+        self.uri: str = os.getenv("NEO4J_URI", "")
+        self.user: str = os.getenv("NEO4J_USER", "")
+        self.password: str = os.getenv("NEO4J_PASSWORD", "")
+        self.driver: Optional[GraphDatabase.driver] = None
+
+        # Verify required environment variables
+        if not all([self.uri, self.user, self.password]):
+            raise ValueError("Missing required environment variables for Neo4j connection")
 
     def connect(self):
+        if not all([self.uri, self.user, self.password]):
+            raise ValueError("Missing required environment variables for Neo4j connection")
+            
         self.driver = GraphDatabase.driver(
             self.uri,
             auth=(self.user, self.password)
