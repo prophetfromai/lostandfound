@@ -1,11 +1,22 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, APIRouter
 from .database import neo4j_connection
 from .cypher_templates import create_item_template
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from neo4j import Driver
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="Neo4j FastAPI Example")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    if not neo4j_connection.verify_connection():
+        raise Exception("Failed to connect to Neo4j database")
+    yield
+    # Shutdown
+    neo4j_connection.close()
+
+app = FastAPI(title="Neo4j FastAPI Example", lifespan=lifespan)
+api_router = APIRouter(prefix="/api/v1")
 
 class ItemCreate(BaseModel):
     name: str
@@ -21,17 +32,7 @@ class ItemCreate(BaseModel):
             "location_name": self.location_name
         }
 
-@app.on_event("startup")
-async def startup_event():
-    # Verify connection on startup
-    if not neo4j_connection.verify_connection():
-        raise Exception("Failed to connect to Neo4j database")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    neo4j_connection.close()
-
-@app.get("/health")
+@api_router.get("/health")
 async def health_check():
     driver: Optional[Driver] = None
     try:
@@ -46,7 +47,7 @@ async def health_check():
         if driver:
             driver.close()
 
-@app.post("/initialize")
+@api_router.post("/initialize")
 async def initialize_database():
     driver: Optional[Driver] = None
     try:
@@ -83,7 +84,7 @@ async def initialize_database():
         if driver:
             driver.close()
 
-@app.post("/items")
+@api_router.post("/items")
 async def create_item(item: ItemCreate):
     """
     Create a new item in the graph database.
