@@ -42,6 +42,7 @@ A simple FastAPI application that connects to a local Neo4j database.
    - API: http://localhost:8000
    - API Documentation: http://localhost:8000/docs
    - Health Check: http://localhost:8000/health
+   - OpenAPI Schema: http://localhost:8000/openapi.json
 
 ## Testing the Connection
 
@@ -59,6 +60,8 @@ A simple FastAPI application that connects to a local Neo4j database.
    ```
 
 ## Troubleshooting
+
+Always append any serious issues to this list with information on how to avoid them.
 
 If you encounter connection issues:
 1. Verify Neo4j Desktop is running
