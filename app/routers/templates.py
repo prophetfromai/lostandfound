@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
 from ..database import neo4j_connection
 from neo4j import Driver
@@ -8,38 +8,133 @@ from neo4j import Driver
 router = APIRouter(prefix="/api/v1/templates", tags=["templates"])
 
 class ParameterModel(BaseModel):
-    name: str
-    type: str
-    description: str
-    required: bool
+    name: str = Field(
+        description="The name of the parameter that will be used in the Cypher query",
+        examples=["user_id", "relationship_type", "start_date"]
+    )
+    type: str = Field(
+        description="The expected data type of the parameter",
+        examples=["string", "integer", "datetime", "list[string]", "dict"],
+    )
+    description: str = Field(
+        description="Detailed description of what this parameter is used for and any constraints",
+        examples=["Unique identifier for the user", "Type of relationship to search for"]
+    )
+    required: bool = Field(
+        description="Indicates if this parameter must be provided when executing the template",
+        examples=[True, False]
+    )
 
 class ReturnModel(BaseModel):
-    name: str
-    type: str
-    description: str
+    name: str = Field(
+        description="The name of the returned field in the query result",
+        examples=["user", "relationships", "count"]
+    )
+    type: str = Field(
+        description="The data type of the returned value",
+        examples=["Node", "Relationship", "integer", "list[Node]", "Path"]
+    )
+    description: str = Field(
+        description="Detailed description of what this return value represents",
+        examples=["The matched user node with all properties", "Count of matching relationships"]
+    )
 
 class ExampleModel(BaseModel):
-    input: Dict[str, Any]
-    output: Dict[str, Any]
+    input: Dict[str, Any] = Field(
+        description="Example input parameters that can be used with this template",
+        examples=[
+            {"user_id": "12345", "relationship_type": "FOLLOWS"},
+            {"start_date": "2024-01-01", "limit": 10}
+        ]
+    )
+    output: Dict[str, Any] = Field(
+        description="Expected output when using the corresponding example input",
+        examples=[
+            {"user": {"id": "12345", "name": "John"}, "relationship_count": 5},
+            {"matched_paths": [{"start": "A", "end": "B"}]}
+        ]
+    )
 
 class TemplateCreate(BaseModel):
-    name: str
-    description: str
-    purpose: str
-    version: str
-    parameters: List[ParameterModel]
-    returns: List[ReturnModel]
-    examples: List[ExampleModel]
-    cypher_query: str
+    name: str = Field(
+        description="Unique identifier for the template",
+        examples=["find_user_relationships", "count_connections"],
+        min_length=1,
+        max_length=100
+    )
+    description: str = Field(
+        description="Detailed description of what this template does",
+        examples=["Finds all relationships between two users", "Counts the number of connections in a user's network"],
+        min_length=10
+    )
+    purpose: str = Field(
+        description="The business or technical purpose this template serves",
+        examples=["User relationship analysis", "Network connectivity metrics"],
+        min_length=5
+    )
+    version: str = Field(
+        description="Version number of the template for tracking changes",
+        examples=["1.0.0", "2.1.3"],
+        pattern=r"^\d+\.\d+\.\d+$"
+    )
+    parameters: List[ParameterModel] = Field(
+        description="List of parameters that this template accepts",
+    )
+    returns: List[ReturnModel] = Field(
+        description="List of values that this template returns",
+    )
+    examples: List[ExampleModel] = Field(
+        description="Example usage scenarios with inputs and expected outputs",
+    )
+    cypher_query: str = Field(
+        description="The parameterized Cypher query that this template will execute",
+        examples=[
+            """
+            MATCH (u:User {id: $user_id})
+            OPTIONAL MATCH (u)-[r:$relationship_type]->(other:User)
+            RETURN u as user, collect(r) as relationships, count(r) as count
+            """
+        ]
+    )
 
 class TemplateSearch(BaseModel):
-    search_term: str
+    search_term: str = Field(
+        description="Term to search for in template descriptions and purposes",
+        examples=["user", "relationship", "network"],
+        min_length=1
+    )
 
 class TemplateCompose(BaseModel):
-    templates: List[str]
-    composition_type: str  # "SEQUENCE" or "PARALLEL"
-    name: str
-    description: str
+    templates: List[str] = Field(
+        description="List of template names to compose together",
+        examples=[["find_user", "count_relationships"]],
+        min_items=2
+    )
+    composition_type: Literal["SEQUENCE", "PARALLEL"] = Field(
+        description="How to compose the templates - either in sequence or parallel",
+        examples=["SEQUENCE", "PARALLEL"]
+    )
+    name: str = Field(
+        description="Name for the newly composed template",
+        examples=["user_relationship_analysis"],
+        min_length=1,
+        max_length=100
+    )
+    description: str = Field(
+        description="Description of what the composed template does",
+        examples=["Finds a user and analyzes their relationships in one operation"],
+        min_length=10
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "templates": ["find_user", "count_relationships"],
+                "composition_type": "SEQUENCE",
+                "name": "user_relationship_analysis",
+                "description": "Finds a user and counts their relationships in sequence"
+            }
+        }
 
 @router.post("/")
 async def create_template(template: TemplateCreate):
