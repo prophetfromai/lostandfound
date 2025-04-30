@@ -243,7 +243,57 @@ async def search_templates(search_term: str):
 
 @router.post("/compose")
 async def compose_templates(composition: TemplateCompose):
-    """Create a new template by composing existing templates"""
+    """Create a new template by composing existing templates.
+    
+    This endpoint allows you to combine multiple existing templates into a new template.
+    The composition can be done in two ways:
+    
+    1. SEQUENCE: Templates are executed in order, where the output of one template can potentially
+       be used as input for the next template in the sequence. Templates are executed in the order
+       they appear in the templates list.
+       
+    2. PARALLEL: Templates are executed independently and their results are combined into a single
+       response. This is useful when you need to gather different types of information simultaneously.
+    
+    Parameters:
+    - templates (List[str]): List of template names to compose. Must contain at least 2 templates.
+      All templates must exist in the system before composition.
+      Example: ["find_user", "count_relationships"]
+      
+    - composition_type (str): Must be either "SEQUENCE" or "PARALLEL". Determines how the templates
+      will be executed together.
+      
+    - name (str): A unique name for the newly composed template. Must be 1-100 characters long.
+      This name will be used to reference the composed template in future operations.
+      
+    - description (str): A detailed description explaining what the composed template does.
+      Should clearly explain the purpose and expected outcome of combining these specific templates.
+      Minimum length: 10 characters.
+    
+    Returns:
+    - A success response with the newly created composed template details
+    
+    Raises:
+    - 400 Error if any of the referenced templates don't exist
+    - 400 Error if the composition fails
+    - 500 Error if there are database connection issues
+    
+    Example Usage:
+    ```json
+    {
+        "templates": ["find_user", "get_user_posts"],
+        "composition_type": "SEQUENCE",
+        "name": "user_with_posts",
+        "description": "Retrieves a user's profile along with their recent posts in a single operation"
+    }
+    ```
+    
+    Notes:
+    - The composed template will be assigned version '1.0' automatically
+    - The composition order is preserved using the 'order' property in the COMPOSES relationship
+    - The composed template can be executed like any other template using the /execute endpoint
+    - Consider the parameter compatibility when composing templates in SEQUENCE mode
+    """
     driver: Optional[Driver] = None
     try:
         driver = neo4j_connection.connect()
