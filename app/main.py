@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, APIRouter
 from .database import neo4j_connection
 from .cypher_templates import create_item_template
+from .routers import templates
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from neo4j import Driver
@@ -17,6 +18,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Neo4j FastAPI Example", lifespan=lifespan)
 api_router = APIRouter(prefix="/api/v1")
+
 
 class ItemCreate(BaseModel):
     name: str
@@ -122,3 +124,8 @@ async def create_item(item: ItemCreate):
     finally:
         if driver:
             driver.close() 
+
+
+# Include all routers
+app.include_router(templates.router)
+app.include_router(api_router)

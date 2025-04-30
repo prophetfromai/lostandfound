@@ -1,0 +1,32 @@
+description: Creates a new item and links it to a specified location
+purpose: Used to add new items to the system with their location information
+parameters:
+  name:
+    type: string
+    description: The name of the item
+    required: true
+  description:
+    type: string
+    description: A description of the item
+    required: true
+  category:
+    type: string
+    description: The category the item belongs to
+    required: true
+  location_name:
+    type: string
+    description: The name of the location where the item is located
+    required: true
+returns:
+  item:
+    type: Node
+    description: The created item node
+example: |
+  {
+    "name": "iPhone 13",
+    "description": "Black iPhone 13 with case",
+    "category": "Electronics",
+    "location_name": "Main Office"
+  }
+version: 1.0
+updated: 2024-04-29 
