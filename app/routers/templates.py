@@ -4,6 +4,7 @@ from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
 from ..database import neo4j_connection
 from neo4j import Driver
+import json
 
 router = APIRouter(prefix="/api/v1/templates", tags=["templates"])
 
@@ -145,6 +146,12 @@ async def create_template(template: TemplateCreate):
         if not driver:
             raise HTTPException(status_code=500, detail="Failed to connect to database")
             
+        # Convert example input/output to JSON strings before sending to Neo4j
+        template_data = template.model_dump()
+        for example in template_data['examples']:
+            example['input'] = json.dumps(example['input'])
+            example['output'] = json.dumps(example['output'])
+            
         with driver.session() as session:
             result = session.run(
                 """
@@ -176,13 +183,13 @@ async def create_template(template: TemplateCreate):
                 WITH template
                 UNWIND $examples as ex
                 MERGE (e:Example {
-                    input: apoc.convert.toJson(ex.input),
-                    output: apoc.convert.toJson(ex.output)
+                    input: ex.input,
+                    output: ex.output
                 })
                 MERGE (template)-[:HAS_EXAMPLE]->(e)
                 RETURN template
                 """,
-                template.model_dump()
+                template_data
             )
             created = result.single()
             if not created:
