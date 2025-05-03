@@ -246,7 +246,56 @@ async def search_templates(search_term: str):
 
 @router.post("/compose")
 async def compose_templates(composition: TemplateCompose):
-    """Create a new template by composing existing templates."""
+    """
+    Create a new template by composing existing templates.
+
+    ---
+    Human Description:
+        This endpoint allows you to create a new "composed" template by combining two or more existing templates.
+        You can compose them in a sequence (one after another) or in parallel (independently).
+        The composed template is saved and can be used like any other template.
+
+        How to use:
+        - Send a POST request to /api/v1/templates/compose with a JSON body:
+            {
+                "templates": ["find_user", "count_relationships"],
+                "composition_type": "SEQUENCE",
+                "name": "user_relationship_analysis",
+                "description": "Finds a user and counts their relationships in sequence"
+            }
+        - All template names must already exist.
+        - The new template will be available for future use.
+
+        On success:
+            {
+                "status": "success",
+                "template": { ...details of the composed template... }
+            }
+        On error:
+            {
+                "detail": "One or more templates not found"
+            }
+
+    ---
+    AI Agent Description:
+        - Endpoint: POST /api/v1/templates/compose
+        - Input:
+            - templates: List[str] (min 2, must exist)
+            - composition_type: "SEQUENCE" | "PARALLEL"
+            - name: str
+            - description: str
+        - Output:
+            - On success: { "status": "success", "template": { ... } }
+            - On error: HTTP 400/500 with error details
+        - Behavior:
+            - Verifies all templates exist.
+            - Creates a new template node with links to the originals and stores composition type.
+            - The composed template can be used in subsequent operations (e.g., execution).
+        - Constraints:
+            - All template names must exist.
+            - At least two templates required.
+            - Name and description must be provided.
+    """
     driver: Optional[Driver] = None
     try:
         driver = neo4j_connection.connect()
