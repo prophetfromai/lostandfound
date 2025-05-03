@@ -243,57 +243,7 @@ async def search_templates(search_term: str):
 
 @router.post("/compose")
 async def compose_templates(composition: TemplateCompose):
-    """Create a new template by composing existing templates.
-    
-    This endpoint allows you to combine multiple existing templates into a new template.
-    The composition can be done in two ways:
-    
-    1. SEQUENCE: Templates are executed in order, where the output of one template can potentially
-       be used as input for the next template in the sequence. Templates are executed in the order
-       they appear in the templates list.
-       
-    2. PARALLEL: Templates are executed independently and their results are combined into a single
-       response. This is useful when you need to gather different types of information simultaneously.
-    
-    Parameters:
-    - templates (List[str]): List of template names to compose. Must contain at least 2 templates.
-      All templates must exist in the system before composition.
-      Example: ["find_user", "count_relationships"]
-      
-    - composition_type (str): Must be either "SEQUENCE" or "PARALLEL". Determines how the templates
-      will be executed together.
-      
-    - name (str): A unique name for the newly composed template. Must be 1-100 characters long.
-      This name will be used to reference the composed template in future operations.
-      
-    - description (str): A detailed description explaining what the composed template does.
-      Should clearly explain the purpose and expected outcome of combining these specific templates.
-      Minimum length: 10 characters.
-    
-    Returns:
-    - A success response with the newly created composed template details
-    
-    Raises:
-    - 400 Error if any of the referenced templates don't exist
-    - 400 Error if the composition fails
-    - 500 Error if there are database connection issues
-    
-    Example Usage:
-    ```json
-    {
-        "templates": ["find_user", "get_user_posts"],
-        "composition_type": "SEQUENCE",
-        "name": "user_with_posts",
-        "description": "Retrieves a user's profile along with their recent posts in a single operation"
-    }
-    ```
-    
-    Notes:
-    - The composed template will be assigned version '1.0' automatically
-    - The composition order is preserved using the 'order' property in the COMPOSES relationship
-    - The composed template can be executed like any other template using the /execute endpoint
-    - Consider the parameter compatibility when composing templates in SEQUENCE mode
-    """
+    """Create a new template by composing existing templates."""
     driver: Optional[Driver] = None
     try:
         driver = neo4j_connection.connect()
@@ -305,10 +255,10 @@ async def compose_templates(composition: TemplateCompose):
             result = session.run(
                 """
                 MATCH (t:Template)
-                WHERE t.name IN $template_names
+                WHERE t.name IN $templates
                 RETURN count(t) as count
                 """,
-                template_names=composition.templates
+                templates=composition.templates
             )
             count = result.single()["count"]
             if count != len(composition.templates):
@@ -318,7 +268,7 @@ async def compose_templates(composition: TemplateCompose):
             result = session.run(
                 """
                 MATCH (t:Template)
-                WHERE t.name IN $template_names
+                WHERE t.name IN $templates
                 WITH collect(t) as templates
                 CREATE (composed:Template {
                     name: $name,
@@ -348,47 +298,7 @@ async def compose_templates(composition: TemplateCompose):
 
 @router.post("/execute/{template_name}")
 async def execute_template(template_name: str, parameters: Dict[str, Any]):
-    """Execute a template with the given parameters.
-    
-    This endpoint allows AI agents to execute predefined Cypher query templates with specific parameters.
-    The template must exist in the system and all required parameters must be provided.
-    
-    Parameters:
-    - template_name (str): The name of the template to execute
-    - parameters (Dict[str, Any]): The parameters to use in the template execution
-    
-    Returns:
-    - A list of records returned by the template execution
-    
-    Raises:
-    - 404 Error if the template is not found
-    - 400 Error if required parameters are missing
-    - 500 Error if there are database connection issues
-    
-    Example Usage:
-    ```json
-    POST /api/v1/templates/execute/find_user_relationships
-    {
-        "user_id": "12345",
-        "relationship_type": "FOLLOWS",
-        "limit": 10
-    }
-    
-    Response:
-    {
-        "result": [
-            {
-                "user": {"id": "12345", "name": "John"},
-                "relationships": [
-                    {"type": "FOLLOWS", "to": {"id": "67890", "name": "Jane"}},
-                    {"type": "FOLLOWS", "to": {"id": "54321", "name": "Bob"}}
-                ],
-                "count": 2
-            }
-        ]
-    }
-    ```
-    """
+    """Execute a template with the given parameters."""
     driver: Optional[Driver] = None
     try:
         driver = neo4j_connection.connect()
@@ -396,31 +306,39 @@ async def execute_template(template_name: str, parameters: Dict[str, Any]):
             raise HTTPException(status_code=500, detail="Failed to connect to database")
             
         with driver.session() as session:
-            # First get the template
+            # First verify the template exists and get its query
             result = session.run(
                 """
-                MATCH (t:Template {name: $name})
+                MATCH (t:Template {name: $template_name})
                 OPTIONAL MATCH (t)-[:HAS_PARAMETER]->(p:Parameter)
                 RETURN t.cypher_query as query, collect(p) as parameters
                 """,
-                name=template_name
+                template_name=template_name
             )
-            template_data = result.single()
-            if not template_data:
+            record = result.single()
+            if not record:
                 raise HTTPException(status_code=404, detail="Template not found")
                 
-            # Validate parameters
-            required_params = {p["name"] for p in template_data["parameters"] if p["required"]}
+            query = record["query"]
+            template_params = record["parameters"]
+            
+            # Validate required parameters
+            required_params = {p["name"] for p in template_params if p["required"]}
             missing_params = required_params - set(parameters.keys())
             if missing_params:
                 raise HTTPException(
-                    status_code=400, 
+                    status_code=400,
                     detail=f"Missing required parameters: {', '.join(missing_params)}"
                 )
+            
+            # Execute the query
+            result = session.run(query, parameters)
+            records = [dict(record) for record in result]
+            
+            if not records:
+                return {"result": [], "message": "No results found"}
                 
-            # Execute the template
-            result = session.run(template_data["query"], parameters)
-            return {"result": [dict(record) for record in result]}
+            return {"result": records}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
