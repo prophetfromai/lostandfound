@@ -561,6 +561,58 @@ async def get_all_templates():
         if driver:
             driver.close()
 
+@router.get("/{template_name}")
+async def get_template(template_name: str):
+    """
+    Get a single template by name with all its details.
+    
+    Args:
+        template_name: The name of the template to retrieve
+        
+    Returns:
+        dict: The template details including parameters, returns, and examples
+    """
+    driver: Optional[Driver] = None
+    try:
+        driver = neo4j_connection.connect()
+        if not driver:
+            raise HTTPException(status_code=500, detail="Failed to connect to database")
+            
+        with driver.session() as session:
+            result = session.run(
+                """
+                MATCH (template:Template {name: $template_name})
+                OPTIONAL MATCH (template)-[:HAS_PARAMETER]->(param:Parameter)
+                OPTIONAL MATCH (template)-[:RETURNS]->(ret:Return)
+                OPTIONAL MATCH (template)-[:HAS_EXAMPLE]->(ex:Example)
+                RETURN template,
+                       collect(DISTINCT param) as parameters,
+                       collect(DISTINCT ret) as returns,
+                       collect(DISTINCT ex) as examples
+                """,
+                template_name=template_name
+            )
+            record = result.single()
+            if not record:
+                raise HTTPException(status_code=404, detail="Template not found")
+                
+            template_data = dict(record["template"])
+            # Clean up the 'updated' field
+            if "updated" in template_data:
+                template_data["updated"] = serialize_neo4j_datetime(template_data["updated"])
+            template_data["parameters"] = [dict(p) for p in record["parameters"]]
+            template_data["returns"] = [dict(r) for r in record["returns"]]
+            template_data["examples"] = [dict(e) for e in record["examples"]]
+            
+            return template_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if driver:
+            driver.close()
+
 @router.delete("/{template_name}")
 async def delete_template(template_name: str):
     """
