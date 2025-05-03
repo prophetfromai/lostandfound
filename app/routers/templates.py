@@ -230,6 +230,9 @@ async def search_templates(search_term: str):
             templates = []
             for record in result:
                 template_data = dict(record["template"])
+                # Clean up the 'updated' field
+                if "updated" in template_data:
+                    template_data["updated"] = serialize_neo4j_datetime(template_data["updated"])
                 template_data["parameters"] = [dict(p) for p in record["parameters"]]
                 template_data["returns"] = [dict(r) for r in record["returns"]]
                 template_data["examples"] = [dict(e) for e in record["examples"]]
@@ -345,6 +348,28 @@ async def execute_template(template_name: str, parameters: Dict[str, Any]):
         if driver:
             driver.close()
 
+def serialize_neo4j_datetime(neo4j_dt):
+    """Convert Neo4j datetime dict to ISO 8601 string."""
+    try:
+        # Defensive: handle both neo4j.time.DateTime and dicts
+        if hasattr(neo4j_dt, 'iso_format'):
+            return neo4j_dt.iso_format()
+        if isinstance(neo4j_dt, dict):
+            date = neo4j_dt.get('_DateTime__date', {})
+            time = neo4j_dt.get('_DateTime__time', {})
+            year = date.get('_Date__year', 1970)
+            month = date.get('_Date__month', 1)
+            day = date.get('_Date__day', 1)
+            hour = time.get('_Time__hour', 0)
+            minute = time.get('_Time__minute', 0)
+            second = time.get('_Time__second', 0)
+            microsecond = int(time.get('_Time__nanosecond', 0) / 1000)
+            dt = datetime(year, month, day, hour, minute, second, microsecond)
+            return dt.isoformat()
+    except Exception:
+        pass
+    return str(neo4j_dt)
+
 @router.get("/")
 async def get_all_templates():
     """Get all templates with their details."""
@@ -371,6 +396,9 @@ async def get_all_templates():
             templates = []
             for record in result:
                 template_data = dict(record["template"])
+                # Clean up the 'updated' field
+                if "updated" in template_data:
+                    template_data["updated"] = serialize_neo4j_datetime(template_data["updated"])
                 template_data["parameters"] = [dict(p) for p in record["parameters"]]
                 template_data["returns"] = [dict(r) for r in record["returns"]]
                 template_data["examples"] = [dict(e) for e in record["examples"]]
