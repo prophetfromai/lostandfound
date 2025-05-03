@@ -109,7 +109,7 @@ class TemplateCompose(BaseModel):
     templates: List[str] = Field(
         description="List of template names to compose together",
         examples=[["find_user", "count_relationships"]],
-        min_items=2
+        min_length=2
     )
     composition_type: Literal["SEQUENCE", "PARALLEL"] = Field(
         description="How to compose the templates - either in sequence or parallel",
@@ -346,9 +346,49 @@ async def compose_templates(composition: TemplateCompose):
         if driver:
             driver.close()
 
-@router.get("/execute/{template_name}")
+@router.post("/execute/{template_name}")
 async def execute_template(template_name: str, parameters: Dict[str, Any]):
-    """Execute a template with the given parameters"""
+    """Execute a template with the given parameters.
+    
+    This endpoint allows AI agents to execute predefined Cypher query templates with specific parameters.
+    The template must exist in the system and all required parameters must be provided.
+    
+    Parameters:
+    - template_name (str): The name of the template to execute
+    - parameters (Dict[str, Any]): The parameters to use in the template execution
+    
+    Returns:
+    - A list of records returned by the template execution
+    
+    Raises:
+    - 404 Error if the template is not found
+    - 400 Error if required parameters are missing
+    - 500 Error if there are database connection issues
+    
+    Example Usage:
+    ```json
+    POST /api/v1/templates/execute/find_user_relationships
+    {
+        "user_id": "12345",
+        "relationship_type": "FOLLOWS",
+        "limit": 10
+    }
+    
+    Response:
+    {
+        "result": [
+            {
+                "user": {"id": "12345", "name": "John"},
+                "relationships": [
+                    {"type": "FOLLOWS", "to": {"id": "67890", "name": "Jane"}},
+                    {"type": "FOLLOWS", "to": {"id": "54321", "name": "Bob"}}
+                ],
+                "count": 2
+            }
+        ]
+    }
+    ```
+    """
     driver: Optional[Driver] = None
     try:
         driver = neo4j_connection.connect()
