@@ -565,12 +565,13 @@ async def get_all_templates():
 async def get_template(template_name: str):
     """
     Get a single template by name with all its details.
+    If the template is a composed template, it will include information about its components.
     
     Args:
         template_name: The name of the template to retrieve
         
     Returns:
-        dict: The template details including parameters, returns, and examples
+        dict: The template details including parameters, returns, examples, and composition info if applicable
     """
     driver: Optional[Driver] = None
     try:
@@ -579,16 +580,16 @@ async def get_template(template_name: str):
             raise HTTPException(status_code=500, detail="Failed to connect to database")
             
         with driver.session() as session:
+            # First check if this is a composed template
             result = session.run(
                 """
-                MATCH (template:Template {name: $template_name})
-                OPTIONAL MATCH (template)-[:HAS_PARAMETER]->(param:Parameter)
-                OPTIONAL MATCH (template)-[:RETURNS]->(ret:Return)
-                OPTIONAL MATCH (template)-[:HAS_EXAMPLE]->(ex:Example)
-                RETURN template,
-                       collect(DISTINCT param) as parameters,
-                       collect(DISTINCT ret) as returns,
-                       collect(DISTINCT ex) as examples
+                MATCH (t:Template {name: $template_name})
+                OPTIONAL MATCH (t)-[comp:COMPOSES]->(component:Template)
+                WITH t, collect({
+                    name: component.name,
+                    order: comp.order
+                }) as components
+                RETURN t, components, size(components) > 0 as is_composed
                 """,
                 template_name=template_name
             )
@@ -596,13 +597,51 @@ async def get_template(template_name: str):
             if not record:
                 raise HTTPException(status_code=404, detail="Template not found")
                 
-            template_data = dict(record["template"])
+            template_data = dict(record["t"])
+            is_composed = record["is_composed"]
+            
+            if is_composed:
+                # Get the composition type and components
+                template_data["composition_type"] = template_data.get("composition_type", "SEQUENCE")
+                template_data["components"] = sorted(record["components"], key=lambda x: x["order"])
+                
+                # Get details for each component
+                for component in template_data["components"]:
+                    component_result = session.run(
+                        """
+                        MATCH (t:Template {name: $name})
+                        OPTIONAL MATCH (t)-[:HAS_PARAMETER]->(param:Parameter)
+                        OPTIONAL MATCH (t)-[:RETURNS]->(ret:Return)
+                        RETURN collect(DISTINCT param) as parameters,
+                               collect(DISTINCT ret) as returns
+                        """,
+                        name=component["name"]
+                    )
+                    component_details = component_result.single()
+                    component["parameters"] = [dict(p) for p in component_details["parameters"]]
+                    component["returns"] = [dict(r) for r in component_details["returns"]]
+            else:
+                # Get regular template details
+                result = session.run(
+                    """
+                    MATCH (template:Template {name: $template_name})
+                    OPTIONAL MATCH (template)-[:HAS_PARAMETER]->(param:Parameter)
+                    OPTIONAL MATCH (template)-[:RETURNS]->(ret:Return)
+                    OPTIONAL MATCH (template)-[:HAS_EXAMPLE]->(ex:Example)
+                    RETURN collect(DISTINCT param) as parameters,
+                           collect(DISTINCT ret) as returns,
+                           collect(DISTINCT ex) as examples
+                    """,
+                    template_name=template_name
+                )
+                details = result.single()
+                template_data["parameters"] = [dict(p) for p in details["parameters"]]
+                template_data["returns"] = [dict(r) for r in details["returns"]]
+                template_data["examples"] = [dict(e) for e in details["examples"]]
+            
             # Clean up the 'updated' field
             if "updated" in template_data:
                 template_data["updated"] = serialize_neo4j_datetime(template_data["updated"])
-            template_data["parameters"] = [dict(p) for p in record["parameters"]]
-            template_data["returns"] = [dict(r) for r in record["returns"]]
-            template_data["examples"] = [dict(e) for e in record["examples"]]
             
             return template_data
     except HTTPException:
