@@ -559,4 +559,59 @@ async def get_all_templates():
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if driver:
+            driver.close()
+
+@router.delete("/{template_name}")
+async def delete_template(template_name: str):
+    """
+    Delete a template by name.
+    
+    Args:
+        template_name: The name of the template to delete
+        
+    Returns:
+        dict: Status message indicating success or failure
+    """
+    driver: Optional[Driver] = None
+    try:
+        driver = neo4j_connection.connect()
+        if not driver:
+            raise HTTPException(status_code=500, detail="Failed to connect to database")
+            
+        with driver.session() as session:
+            # First check if template exists
+            result = session.run(
+                """
+                MATCH (t:Template {name: $template_name})
+                RETURN t
+                """,
+                template_name=template_name
+            )
+            if not result.single():
+                raise HTTPException(status_code=404, detail="Template not found")
+                
+            # Delete the template and all its relationships
+            result = session.run(
+                """
+                MATCH (t:Template {name: $template_name})
+                OPTIONAL MATCH (t)-[r]->(n)
+                DELETE r, t
+                RETURN count(t) as deleted_count
+                """,
+                template_name=template_name
+            )
+            deleted_count = result.single()["deleted_count"]
+            if deleted_count == 0:
+                raise HTTPException(status_code=500, detail="Failed to delete template")
+                
+            return {
+                "status": "success",
+                "message": f"Template '{template_name}' deleted successfully"
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if driver:
             driver.close() 
