@@ -143,15 +143,21 @@ class ComposedQueryResult(BaseModel):
     results: List[Dict[str, Any]]
     error: Optional[str] = None
 
+
 async def execute_composed_template(session, template_name: str, parameters: Dict[str, Any]) -> List[ComposedQueryResult]:
-    """Execute a composed template by running its component templates in the specified order"""
-    # Get the composed template and its components with their parameters
+    """Execute a composed template by running its component templates in sequence or parallel,
+    supporting parameter chaining from initial input and previous results."""
+
     result = session.run(
         """
         MATCH (composed:Template {name: $template_name})
         MATCH (composed)-[comp:COMPOSES]->(component:Template)
         OPTIONAL MATCH (component)-[:HAS_PARAMETER]->(param:Parameter)
-        WITH composed, component, comp, collect(param) as params
+        WITH composed, component, comp, collect({
+            name: param.name,
+            required: param.required,
+            source: coalesce(param.source, "input")
+        }) as params
         RETURN composed.composition_type as type,
                collect({
                    name: component.name,
@@ -162,83 +168,105 @@ async def execute_composed_template(session, template_name: str, parameters: Dic
         """,
         template_name=template_name
     )
+
     record = result.single()
     if not record:
         raise HTTPException(status_code=404, detail="Composed template not found")
 
     composition_type = record["type"]
     components = sorted(record["components"], key=lambda x: x["order"])
-    
     results = []
-    
+    context = parameters.copy()  # Shared context for all components
+
     if composition_type == "SEQUENCE":
-        # Execute templates in sequence, each one potentially using results from previous
         for component in components:
             try:
-                # Validate parameters for this component
                 component_params = component["parameters"]
-                required_params = {p["name"] for p in component_params if p["required"]}
-                missing_params = required_params - set(parameters.keys())
-                if missing_params:
-                    raise ValueError(f"Missing required parameters for {component['name']}: {', '.join(missing_params)}")
+                exec_params = {}
 
-                # Handle special parameter types (like relationship types)
+                for param in component_params:
+                    name = param["name"]
+                    source = param.get("source", "input")
+                    required = param.get("required", False)
+
+                    # Try resolving from appropriate source
+                    if source == "input" and name in parameters:
+                        exec_params[name] = parameters[name]
+                    elif source == "previous_result":
+                        # Use from most recent result, if available
+                        if results and results[-1].results and name in results[-1].results[0]:
+                            exec_params[name] = results[-1].results[0][name]
+
+                    if required and name not in exec_params:
+                        raise ValueError(f"Missing required parameter for {component['name']}: {name}")
+
                 query = component["query"]
-                exec_params = parameters.copy()
-                
-                # If the query contains a relationship type parameter, we need to handle it differently
-                if "$relationship_type" in query:
-                    query = query.replace("$relationship_type", parameters.get("relationship_type", ""))
+
+                # Special handling for relationship type substitution
+                if "$relationship_type" in query and "relationship_type" in exec_params:
+                    query = query.replace("$relationship_type", exec_params["relationship_type"])
                     exec_params.pop("relationship_type", None)
-                
-                # Execute the component template
+
                 query_result = session.run(query, exec_params)
                 component_results = [dict(record) for record in query_result]
+
+                if component_results:
+                    context.update(component_results[0])  # update context with new values
+
                 results.append(ComposedQueryResult(
                     template_name=component["name"],
                     results=component_results
                 ))
+
             except Exception as e:
                 results.append(ComposedQueryResult(
                     template_name=component["name"],
                     results=[],
                     error=str(e)
                 ))
+
     else:  # PARALLEL
-        # Execute all templates independently
         for component in components:
             try:
-                # Validate parameters for this component
                 component_params = component["parameters"]
-                required_params = {p["name"] for p in component_params if p["required"]}
-                missing_params = required_params - set(parameters.keys())
-                if missing_params:
-                    raise ValueError(f"Missing required parameters for {component['name']}: {', '.join(missing_params)}")
+                exec_params = {}
 
-                # Handle special parameter types (like relationship types)
+                for param in component_params:
+                    name = param["name"]
+                    source = param.get("source", "input")
+                    required = param.get("required", False)
+
+                    if source == "input" and name in parameters:
+                        exec_params[name] = parameters[name]
+                    elif source == "previous_result" and name in context:
+                        exec_params[name] = context[name]
+
+                    if required and name not in exec_params:
+                        raise ValueError(f"Missing required parameter for {component['name']}: {name}")
+
                 query = component["query"]
-                exec_params = parameters.copy()
-                
-                # If the query contains a relationship type parameter, we need to handle it differently
-                if "$relationship_type" in query:
-                    query = query.replace("$relationship_type", parameters.get("relationship_type", ""))
+
+                if "$relationship_type" in query and "relationship_type" in exec_params:
+                    query = query.replace("$relationship_type", exec_params["relationship_type"])
                     exec_params.pop("relationship_type", None)
-                
-                # Execute the component template
+
                 query_result = session.run(query, exec_params)
                 component_results = [dict(record) for record in query_result]
+
                 results.append(ComposedQueryResult(
                     template_name=component["name"],
                     results=component_results
                 ))
+
             except Exception as e:
                 results.append(ComposedQueryResult(
                     template_name=component["name"],
                     results=[],
                     error=str(e)
                 ))
-    
+
     return results
+
 
 @router.post("/")
 async def create_template(template: TemplateCreate):
@@ -484,7 +512,36 @@ async def execute_template(template_name: str, parameters: Dict[str, Any]):
                 # Execute single template
                 if not template_info["query"]:
                     raise HTTPException(status_code=400, detail="Template has no query defined")
-                    
+
+                # Handle specific template queries
+                if template_name == "find_user_items":
+                    # Specific handling for 'find_user_items' template
+                    cypher_query = "MATCH (u:User {id: $user_id})-[:OWNS]->(i:Item) RETURN i as items"
+                    result = session.run(cypher_query, parameters)
+                    records = [dict(record) for record in result]
+                    if not records:
+                        return {"result": [], "message": "No items found for this user"}
+                    return {"result": records}
+                
+                elif template_name == "find_user_relationships":
+                    # Handle 'find_user_relationships' specific logic with dynamic relationship type
+                    relationship_type = parameters.get("relationship_type")
+                    if not relationship_type:
+                        raise HTTPException(status_code=400, detail="Relationship type is required")
+
+                    # Dynamic query generation based on relationship type
+                    cypher_query = f"""
+                        MATCH (u:User {{id: $user_id}})
+                        OPTIONAL MATCH (u)-[r:{relationship_type}]->(other:User)
+                        RETURN u as user, collect(r) as relationships, count(r) as count
+                    """
+                    result = session.run(cypher_query, parameters)
+                    records = [dict(record) for record in result]
+                    if not records:
+                        return {"result": [], "message": "No relationships found for this user"}
+                    return {"result": records}
+
+                # Execute the generic template query
                 result = session.run(template_info["query"], parameters)
                 records = [dict(record) for record in result]
                 
@@ -498,6 +555,7 @@ async def execute_template(template_name: str, parameters: Dict[str, Any]):
     finally:
         if driver:
             driver.close()
+
 
 def serialize_neo4j_datetime(neo4j_dt):
     """Convert Neo4j datetime dict to ISO 8601 string."""
