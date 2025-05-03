@@ -343,4 +343,41 @@ async def execute_template(template_name: str, parameters: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if driver:
+            driver.close()
+
+@router.get("/")
+async def get_all_templates():
+    """Get all templates with their details."""
+    driver: Optional[Driver] = None
+    try:
+        driver = neo4j_connection.connect()
+        if not driver:
+            raise HTTPException(status_code=500, detail="Failed to connect to database")
+            
+        with driver.session() as session:
+            result = session.run(
+                """
+                MATCH (template:Template)
+                OPTIONAL MATCH (template)-[:HAS_PARAMETER]->(param:Parameter)
+                OPTIONAL MATCH (template)-[:RETURNS]->(ret:Return)
+                OPTIONAL MATCH (template)-[:HAS_EXAMPLE]->(ex:Example)
+                RETURN template,
+                       collect(DISTINCT param) as parameters,
+                       collect(DISTINCT ret) as returns,
+                       collect(DISTINCT ex) as examples
+                ORDER BY template.updated DESC
+                """
+            )
+            templates = []
+            for record in result:
+                template_data = dict(record["template"])
+                template_data["parameters"] = [dict(p) for p in record["parameters"]]
+                template_data["returns"] = [dict(r) for r in record["returns"]]
+                template_data["examples"] = [dict(e) for e in record["examples"]]
+                templates.append(template_data)
+            return {"templates": templates}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if driver:
             driver.close() 
