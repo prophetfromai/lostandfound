@@ -137,6 +137,109 @@ class TemplateCompose(BaseModel):
             }
         }
 
+class ComposedQueryResult(BaseModel):
+    """Model for storing results from composed template execution"""
+    template_name: str
+    results: List[Dict[str, Any]]
+    error: Optional[str] = None
+
+async def execute_composed_template(session, template_name: str, parameters: Dict[str, Any]) -> List[ComposedQueryResult]:
+    """Execute a composed template by running its component templates in the specified order"""
+    # Get the composed template and its components with their parameters
+    result = session.run(
+        """
+        MATCH (composed:Template {name: $template_name})
+        MATCH (composed)-[comp:COMPOSES]->(component:Template)
+        OPTIONAL MATCH (component)-[:HAS_PARAMETER]->(param:Parameter)
+        WITH composed, component, comp, collect(param) as params
+        RETURN composed.composition_type as type,
+               collect({
+                   name: component.name,
+                   query: component.cypher_query,
+                   order: comp.order,
+                   parameters: params
+               }) as components
+        """,
+        template_name=template_name
+    )
+    record = result.single()
+    if not record:
+        raise HTTPException(status_code=404, detail="Composed template not found")
+
+    composition_type = record["type"]
+    components = sorted(record["components"], key=lambda x: x["order"])
+    
+    results = []
+    
+    if composition_type == "SEQUENCE":
+        # Execute templates in sequence, each one potentially using results from previous
+        for component in components:
+            try:
+                # Validate parameters for this component
+                component_params = component["parameters"]
+                required_params = {p["name"] for p in component_params if p["required"]}
+                missing_params = required_params - set(parameters.keys())
+                if missing_params:
+                    raise ValueError(f"Missing required parameters for {component['name']}: {', '.join(missing_params)}")
+
+                # Handle special parameter types (like relationship types)
+                query = component["query"]
+                exec_params = parameters.copy()
+                
+                # If the query contains a relationship type parameter, we need to handle it differently
+                if "$relationship_type" in query:
+                    query = query.replace("$relationship_type", parameters.get("relationship_type", ""))
+                    exec_params.pop("relationship_type", None)
+                
+                # Execute the component template
+                query_result = session.run(query, exec_params)
+                component_results = [dict(record) for record in query_result]
+                results.append(ComposedQueryResult(
+                    template_name=component["name"],
+                    results=component_results
+                ))
+            except Exception as e:
+                results.append(ComposedQueryResult(
+                    template_name=component["name"],
+                    results=[],
+                    error=str(e)
+                ))
+    else:  # PARALLEL
+        # Execute all templates independently
+        for component in components:
+            try:
+                # Validate parameters for this component
+                component_params = component["parameters"]
+                required_params = {p["name"] for p in component_params if p["required"]}
+                missing_params = required_params - set(parameters.keys())
+                if missing_params:
+                    raise ValueError(f"Missing required parameters for {component['name']}: {', '.join(missing_params)}")
+
+                # Handle special parameter types (like relationship types)
+                query = component["query"]
+                exec_params = parameters.copy()
+                
+                # If the query contains a relationship type parameter, we need to handle it differently
+                if "$relationship_type" in query:
+                    query = query.replace("$relationship_type", parameters.get("relationship_type", ""))
+                    exec_params.pop("relationship_type", None)
+                
+                # Execute the component template
+                query_result = session.run(query, exec_params)
+                component_results = [dict(record) for record in query_result]
+                results.append(ComposedQueryResult(
+                    template_name=component["name"],
+                    results=component_results
+                ))
+            except Exception as e:
+                results.append(ComposedQueryResult(
+                    template_name=component["name"],
+                    results=[],
+                    error=str(e)
+                ))
+    
+    return results
+
 @router.post("/")
 async def create_template(template: TemplateCreate):
     """Create a new template in the knowledge graph"""
@@ -358,39 +461,38 @@ async def execute_template(template_name: str, parameters: Dict[str, Any]):
             raise HTTPException(status_code=500, detail="Failed to connect to database")
             
         with driver.session() as session:
-            # First verify the template exists and get its query
+            # Check if this is a composed template
             result = session.run(
                 """
                 MATCH (t:Template {name: $template_name})
-                OPTIONAL MATCH (t)-[:HAS_PARAMETER]->(p:Parameter)
-                RETURN t.cypher_query as query, collect(p) as parameters
+                RETURN exists((t)-[:COMPOSES]->()) as is_composed,
+                       t.cypher_query as query
                 """,
                 template_name=template_name
             )
-            record = result.single()
-            if not record:
+            template_info = result.single()
+            if not template_info:
                 raise HTTPException(status_code=404, detail="Template not found")
+
+            if template_info["is_composed"]:
+                # Handle composed template execution
+                results = await execute_composed_template(session, template_name, parameters)
+                return {
+                    "composed_results": [result.dict() for result in results]
+                }
+            else:
+                # Execute single template
+                if not template_info["query"]:
+                    raise HTTPException(status_code=400, detail="Template has no query defined")
+                    
+                result = session.run(template_info["query"], parameters)
+                records = [dict(record) for record in result]
                 
-            query = record["query"]
-            template_params = record["parameters"]
-            
-            # Validate required parameters
-            required_params = {p["name"] for p in template_params if p["required"]}
-            missing_params = required_params - set(parameters.keys())
-            if missing_params:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Missing required parameters: {', '.join(missing_params)}"
-                )
-            
-            # Execute the query
-            result = session.run(query, parameters)
-            records = [dict(record) for record in result]
-            
-            if not records:
-                return {"result": [], "message": "No results found"}
+                if not records:
+                    return {"result": [], "message": "No results found"}
+                    
+                return {"result": records}
                 
-            return {"result": records}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
